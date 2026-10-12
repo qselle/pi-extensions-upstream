@@ -87,7 +87,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 |---|---|
 | [`cached-line-resets`](extensions/cached-line-resets/) | Caches pi's per-line ANSI reset application so rendering large transcript regions stays fast |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
-| [`image-store`](extensions/image-store/) | Stores image payloads as deduplicated sidecars and renders transcript history lazily |
+| [`image-store`](extensions/image-store/) | Stores image payloads as deduplicated sidecars, renders transcript history lazily, shows pasted image paths as `[Image N]` tokens with thumbnails, and opens images in a full-screen viewer |
 | [`koliko`](extensions/koliko/) | Points to Koliko's separately maintained, privacy-preserving Pi usage collector |
 
 Each extension directory has its own `README.md` describing its behavior or, for external integrations, linking to the authoritative implementation.

@@ -39,6 +39,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	ContentAddressedImageStore,
+	forwardMouse,
 	renderStoredImagePreviews,
 	type StoredImagePreviewState,
 } from "../image-store/index.js";
@@ -77,12 +78,19 @@ function withStoredImagePreviews(
 		state,
 	);
 	if (!previews) return base;
+	let heights: number[] = [];
 	return {
-		render: (width: number) => [...base.render(width), ...previews.render(width)],
+		render: (width: number) => {
+			const rendered = [base.render(width), previews.render(width)];
+			heights = rendered.map((lines) => lines.length);
+			return rendered.flat();
+		},
 		invalidate: () => {
 			base.invalidate?.();
 			previews.invalidate?.();
 		},
+		// Clicking an image opens the full-screen viewer.
+		handleMouse: (event) => forwardMouse([base, previews], heights, event),
 	};
 }
 

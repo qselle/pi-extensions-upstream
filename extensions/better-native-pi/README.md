@@ -73,7 +73,8 @@ clickable, home-shortened path; the redundant row is omitted otherwise.
 `Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
 content without duplicating an already-shown diff. Read results backed by
 `image-store` render their live sidecar inline immediately for the current
-user-visible run and the previous one; resumed images stay unloaded until expanded.
+user-visible run and the previous one; resumed images stay unloaded until expanded. Clicking an
+image opens `image-store`'s full-screen viewer.
 
 Exploration groups wait until a tool actually starts executing before rendering
 live rows. This avoids flashing streamed JSON fragments such as half-written

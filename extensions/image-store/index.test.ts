@@ -99,6 +99,7 @@ describe("extension hooks", () => {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 			appendEntry() {},
 			registerEntryRenderer() {},
+			registerShortcut() {},
 			registerCommand() {},
 		};
 		imageStoreExtension(pi as any);
@@ -149,6 +150,7 @@ describe("extension hooks", () => {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 			appendEntry() {},
 			registerEntryRenderer() {},
+			registerShortcut() {},
 			registerCommand() {},
 		};
 		imageStoreExtension(pi as any);
@@ -195,6 +197,7 @@ describe("extension hooks", () => {
 			appendEntry() {},
 			sendMessage(message: any) { sent.push(message); },
 			registerEntryRenderer() {},
+			registerShortcut() {},
 			registerCommand() {},
 		};
 		imageStoreExtension(pi as any);
@@ -246,6 +249,7 @@ describe("extension hooks", () => {
 			on() {},
 			appendEntry() {},
 			registerEntryRenderer() {},
+			registerShortcut() {},
 			registerCommand(_name: string, options: any) { command = options.handler; },
 		};
 		imageStoreExtension(pi as any);

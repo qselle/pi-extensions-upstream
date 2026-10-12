@@ -1,7 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToPng, getAgentDir, keyHint } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { getCapabilities, Image, Text, type Component } from "@earendil-works/pi-tui";
+import { getCapabilities, Image, Text, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	createReadStream,
@@ -18,6 +18,8 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
+import { createPasteTokens, PASTE_COMPLETIONS, PASTE_USAGE } from "./paste-tokens";
+import type { ViewerItem } from "./viewer";
 
 const ENTRY_TYPE = "image-store-v1";
 const CONTEXT_MESSAGE_TYPE = "image-store-context-v1";
@@ -25,6 +27,7 @@ export const DETAILS_KEY = "__pi_image_store";
 const STORE_DIRECTORY = "image-store";
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const LIVE_REGISTRY = Symbol.for("pi.image-store.live-registry.v2");
+const VIEWER_REGISTRY = Symbol.for("pi.image-store.viewer.v1");
 const MARKER_SOURCE = String.raw`\[image [0-9a-f]{8}\]\(pi-image:\/\/sha256\/([0-9a-f]{64})\?mime=([^&)\s]+)&bytes=([0-9]+)\)`;
 const JSON_DIGEST_SOURCE = String.raw`"digest"\s*:\s*"([0-9a-f]{64})"`;
 const BLOB_FILENAME = /^([0-9a-f]{64})\.[a-z0-9]+$/;
@@ -84,6 +87,31 @@ function clearLive(): void {
 	registry.current.clear();
 	registry.previous.clear();
 	registry.runActive = false;
+}
+
+/** The current session's viewer, shared by every copy of this module that renders previews. */
+function viewerRegistry(): { open?: (digest: string) => void } {
+	const globals = globalThis as typeof globalThis & { [VIEWER_REGISTRY]?: { open?: (digest: string) => void } };
+	return globals[VIEWER_REGISTRY] ??= {};
+}
+
+/** Open the full-screen viewer at a stored image; false when no session can show it. */
+export function openStoredImage(digest: string): boolean {
+	const open = viewerRegistry().open;
+	if (!open) return false;
+	open(digest);
+	return true;
+}
+
+/** Forward a mouse event to the stacked child rendered at its row. */
+export function forwardMouse(children: readonly Component[], heights: readonly number[], event: TuiMouseEvent): TuiMouseEventResult | undefined {
+	let top = 0;
+	for (const [index, child] of children.entries()) {
+		const height = heights[index] ?? 0;
+		if (event.y >= top && event.y < top + height) return child.handleMouse?.({ ...event, y: event.y - top, height });
+		top += height;
+	}
+	return undefined;
 }
 
 export function isStoredImageLive(digest: string): boolean {
@@ -410,6 +438,12 @@ export class StoredImagePreview implements Component {
 		return [...heading, ...this.image.render(width)];
 	}
 
+	/** A click opens the full-screen viewer at this image. */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		return openStoredImage(this.entry.ref.digest) ? { handled: true } : undefined;
+	}
+
 	invalidate(): void {
 		this.image?.invalidate();
 	}
@@ -432,9 +466,15 @@ export function renderStoredImagePreviews(
 		() => expanded || isStoredImageLive(ref.digest),
 		{ heading: false, hiddenWhenCollapsed: true, invalidate, state },
 	));
+	let heights: number[] = [];
 	return {
-		render: (width: number) => previews.flatMap((preview) => preview.render(width)),
+		render: (width: number) => {
+			const rendered = previews.map((preview) => preview.render(width));
+			heights = rendered.map((lines) => lines.length);
+			return rendered.flat();
+		},
 		invalidate: () => previews.forEach((preview) => preview.invalidate()),
+		handleMouse: (event: TuiMouseEvent) => forwardMouse(previews, heights, event),
 	};
 }
 
@@ -493,15 +533,37 @@ function formatBytes(bytes: number): string {
 export default function imageStoreExtension(pi: ExtensionAPI) {
 	const agentDirectory = configDirectory();
 	const store = new ContentAddressedImageStore(agentDirectory);
+	const pasteTokens = createPasteTokens(pi, agentDirectory);
 
 	const appendPreview = (ref: StoredImageRef, label?: string) => {
 		markLive(ref.digest);
 		pi.appendEntry(ENTRY_TYPE, { version: 1, ref, label } satisfies StoredImageEntry);
 	};
 
-	pi.on("session_start", () => {
+	/** Show the branch's stored images full-screen, starting at one; ←/→ step through them. */
+	const openViewer = (ctx: ExtensionContext, digest: string) => {
+		const items: ViewerItem[] = [];
+		const seen = new Set<string>();
+		for (const entry of ctx.sessionManager.getBranch()) {
+			const refs = entry.type === "message"
+				? refsFromDetails(entry.message)
+				: entry.type === "custom" && entry.customType === ENTRY_TYPE ? [(entry.data as StoredImageEntry | undefined)?.ref] : [];
+			for (const ref of refs) {
+				if (!ref || seen.has(ref.digest)) continue;
+				seen.add(ref.digest);
+				items.push({ caption: `image ${ref.digest.slice(0, 8)}`, image: ref });
+			}
+		}
+		const index = items.findIndex((item) => item.image.digest === digest);
+		if (index >= 0) void pasteTokens.show(items, index, store);
+	};
+	let opener: ((digest: string) => void) | undefined;
+
+	pi.on("session_start", (_event, ctx) => {
 		clearLive();
 		store.clearCache();
+		opener = (digest) => openViewer(ctx, digest);
+		viewerRegistry().open = opener;
 	});
 
 	pi.on("agent_start", () => beginLiveRun());
@@ -510,6 +572,8 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	pi.on("session_shutdown", () => {
 		clearLive();
 		store.clearCache();
+		if (viewerRegistry().open === opener) viewerRegistry().open = undefined;
+		opener = undefined;
 	});
 
 	pi.on("input", async (event, ctx) => {
@@ -568,9 +632,14 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("image-store", {
-		description: "Show image sidecar stats or garbage-collect unused blobs",
+		description: "Image sidecar stats and gc, pasted-image viewer and preview settings",
+		getArgumentCompletions: (prefix) => {
+			const matches = ["stats", "gc", ...PASTE_COMPLETIONS].filter((value) => value.startsWith(prefix.trimStart().toLowerCase()));
+			return matches.length ? matches.map((value) => ({ value, label: value })) : null;
+		},
 		handler: async (args, ctx) => {
 			const action = args.trim() || "stats";
+			if (await pasteTokens.command(action, ctx)) return;
 			const blobs = await listBlobs(store);
 			const totalBytes = blobs.reduce((sum, blob) => sum + blob.bytes, 0);
 			if (action === "stats") {
@@ -578,7 +647,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 				return;
 			}
 			if (action !== "gc") {
-				ctx.ui.notify("Usage: /image-store [stats|gc]", "warning");
+				ctx.ui.notify(`Usage: /image-store [stats | gc | ${PASTE_USAGE}]`, "warning");
 				return;
 			}
 			if (!ctx.hasUI || !await ctx.ui.confirm("Garbage-collect image sidecars?", "Delete blobs not referenced by any saved session?")) return;
